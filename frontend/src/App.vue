@@ -65,6 +65,7 @@
                 v-model="form.searchEngine"
                 class="w-full px-4 py-3 bg-slate-900/50 border border-slate-600 rounded-xl text-white focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-transparent transition"
               >
+                <option value="google">Google</option>
                 <option value="duckduckgo">DuckDuckGo (Recommended)</option>
                 <option value="brave">Brave Search</option>
                 <option value="qwant">Qwant</option>

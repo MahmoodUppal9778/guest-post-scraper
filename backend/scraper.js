@@ -3,143 +3,208 @@ import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import * as cheerio from 'cheerio';
 import UserAgent from 'user-agents';
 import { searchEngines } from './searchEngines.js';
+import { getCountryName, getCountryDomainSuffixes } from './country.js';
 
 puppeteer.use(StealthPlugin());
 
-// Human-like delays
+// Configurable delays - can be reduced for speed while maintaining human-like patterns
+const DELAYS = {
+  searchMin: 1500,      // Min delay between searches
+  searchMax: 3000,      // Max delay between searches
+  pageLoadMin: 800,     // Min delay after page load
+  pageLoadMax: 1500,    // Max delay after page load
+  scrollMin: 300,       // Min delay after scroll
+  scrollMax: 800,       // Max delay after scroll
+  visitMin: 500,        // Min delay when visiting result pages
+  visitMax: 1000        // Max delay when visiting result pages
+};
+
+// Concurrent page limit for speed
+const MAX_CONCURRENT_VISITS = 3;
+
+// Human-like delays with variance
 const randomDelay = (min, max) => {
-  return new Promise(resolve => setTimeout(resolve, Math.random() * (max - min) + min));
+  const variance = (max - min) * 0.2;
+  const base = Math.random() * (max - min) + min;
+  const jitter = (Math.random() - 0.5) * variance;
+  return new Promise(resolve => setTimeout(resolve, Math.max(min, base + jitter)));
 };
 
-// Human-like mouse movements
+// Human-like mouse movements (lightweight)
 const humanMove = async (page) => {
-  const width = await page.evaluate(() => window.innerWidth);
-  const height = await page.evaluate(() => window.innerHeight);
-  
-  await page.mouse.move(
-    Math.random() * width,
-    Math.random() * height,
-    { steps: Math.floor(Math.random() * 25) + 5 }
-  );
+  try {
+    const width = await page.evaluate(() => window.innerWidth);
+    const height = await page.evaluate(() => window.innerHeight);
+    await page.mouse.move(
+      Math.random() * width * 0.8 + width * 0.1,
+      Math.random() * height * 0.8 + height * 0.1,
+      { steps: Math.floor(Math.random() * 10) + 3 }
+    );
+  } catch (e) { /* ignore */ }
 };
 
-// Human-like scrolling
+// Human-like scrolling (faster)
 const humanScroll = async (page) => {
-  await page.evaluate(async () => {
-    const scrollAmount = Math.random() * 500 + 200;
-    window.scrollBy({ top: scrollAmount, behavior: 'smooth' });
-  });
-  await randomDelay(500, 1500);
+  try {
+    await page.evaluate(() => {
+      window.scrollBy({ top: Math.random() * 400 + 150, behavior: 'smooth' });
+    });
+    await randomDelay(DELAYS.scrollMin, DELAYS.scrollMax);
+  } catch (e) { /* ignore */ }
 };
 
 // Search queries for finding guest posting sites
 const generateSearchQueries = (niche, country) => {
-  const countryTLD = country ? `.${country.toLowerCase()}` : '';
   const countryName = getCountryName(country);
+  const countrySuffixes = getCountryDomainSuffixes(country);
   
+  // Core queries - reduced set for speed
   const queries = [
-    // Guest posting queries
     `"${niche}" "write for us"`,
     `"${niche}" "guest post"`,
     `"${niche}" "submit a guest post"`,
     `"${niche}" "become a contributor"`,
-    `"${niche}" "contributing writer"`,
     `"${niche}" "guest author"`,
     `"${niche}" "submit article"`,
-    `"${niche}" "guest posting guidelines"`,
-    `"${niche}" "contributor guidelines"`,
-    
-    // Link insertion queries
     `"${niche}" "sponsored post"`,
     `"${niche}" "advertise with us"`,
-    `"${niche}" "paid post"`,
-    `"${niche}" "link insertion"`,
-    `"${niche}" "niche edit"`,
-    
-    // Blog-specific
     `"${niche}" blog "write for us"`,
-    `"${niche}" blog "guest post guidelines"`,
   ];
 
-  // Add country-specific queries
+  // Country-specific queries
   if (countryName) {
     queries.push(
+      `${niche} write for us ${countryName}`,
+      `${niche} guest post ${countryName}`,
       `"${niche}" "write for us" ${countryName}`,
-      `"${niche}" "guest post" site:*${countryTLD}`,
-      `"${niche}" blog ${countryName} "submit article"`
+      `${niche} blog ${countryName} guest post`
+    );
+  }
+
+  // ccTLD targeting
+  if (countrySuffixes.length > 0) {
+    const suffix = countrySuffixes[0]; // Use primary suffix
+    queries.push(
+      `${niche} write for us site:*${suffix}`,
+      `"${niche}" "guest post" site:*${suffix}`
     );
   }
 
   return queries;
 };
 
-const getCountryName = (code) => {
-  const countries = {
-    'us': 'USA',
-    'uk': 'UK',
-    'gb': 'UK',
-    'ca': 'Canada',
-    'au': 'Australia',
-    'in': 'India',
-    'de': 'Germany',
-    'fr': 'France',
-    'es': 'Spain',
-    'it': 'Italy',
-    'nl': 'Netherlands',
-    'br': 'Brazil',
-    'mx': 'Mexico',
-  };
-  return countries[code?.toLowerCase()] || '';
+const urlMatchesCountry = (url, countryCode) => {
+  const suffixes = getCountryDomainSuffixes(countryCode);
+  if (!suffixes.length) return true;
+
+  try {
+    const hostname = new URL(url).hostname.toLowerCase();
+    return suffixes.some((s) => hostname.endsWith(s));
+  } catch {
+    return false;
+  }
 };
 
-// Extract contact information from page
+// Extract contact information from page (optimized)
 const extractContactInfo = async (page, url) => {
   try {
-    const html = await page.content();
-    const $ = cheerio.load(html);
-    
-    // Find email addresses
-    const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
-    const pageText = $('body').text();
-    const emails = pageText.match(emailRegex) || [];
-    
-    // Filter out common non-contact emails
-    const filteredEmails = emails.filter(email => 
-      !email.includes('example.com') &&
-      !email.includes('domain.com') &&
-      !email.includes('email.com') &&
-      !email.includes('wixpress.com') &&
-      !email.includes('sentry.io')
-    );
+    const result = await page.evaluate(() => {
+      const bodyText = document.body?.innerText || '';
+      const titleText = document.title || document.querySelector('h1')?.textContent || '';
+      
+      // Find emails
+      const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
+      const emails = bodyText.match(emailRegex) || [];
+      const filteredEmails = emails.filter(email => 
+        !email.includes('example.com') &&
+        !email.includes('domain.com') &&
+        !email.includes('wixpress.com') &&
+        !email.includes('sentry.io')
+      );
 
-    // Determine if it's guest post or link insertion
-    const bodyText = pageText.toLowerCase();
-    let type = 'unknown';
-    
-    if (bodyText.includes('write for us') || 
-        bodyText.includes('guest post') || 
-        bodyText.includes('guest author') ||
-        bodyText.includes('submit article') ||
-        bodyText.includes('contributor')) {
-      type = 'guest_post';
-    }
-    
-    if (bodyText.includes('sponsored') || 
-        bodyText.includes('advertise') ||
-        bodyText.includes('paid post') ||
-        bodyText.includes('link insertion')) {
-      type = type === 'guest_post' ? 'both' : 'link_insertion';
-    }
+      // Determine type
+      const lower = bodyText.toLowerCase();
+      let type = 'unknown';
+      
+      if (lower.includes('write for us') || lower.includes('guest post') || 
+          lower.includes('guest author') || lower.includes('submit article') ||
+          lower.includes('contributor')) {
+        type = 'guest_post';
+      }
+      
+      if (lower.includes('sponsored') || lower.includes('advertise') ||
+          lower.includes('paid post') || lower.includes('link insertion')) {
+        type = type === 'guest_post' ? 'both' : 'link_insertion';
+      }
 
-    return {
-      contactEmail: filteredEmails[0] || null,
-      type,
-      title: $('title').text().trim() || $('h1').first().text().trim()
-    };
+      return {
+        contactEmail: filteredEmails[0] || null,
+        type,
+        title: titleText.trim().substring(0, 200)
+      };
+    });
+    
+    return result;
   } catch (error) {
-    console.error(`Error extracting info from ${url}:`, error.message);
     return { contactEmail: null, type: 'unknown', title: '' };
   }
+};
+
+// Process results in parallel batches
+const processResultsBatch = async (browser, urls, userAgent, niche, country, query, onResult) => {
+  const results = [];
+  
+  for (let i = 0; i < urls.length; i += MAX_CONCURRENT_VISITS) {
+    const batch = urls.slice(i, i + MAX_CONCURRENT_VISITS);
+    
+    const batchPromises = batch.map(async (url) => {
+      let newPage = null;
+      try {
+        newPage = await browser.newPage();
+        await newPage.setUserAgent(userAgent.toString());
+        await newPage.setViewport({ width: 1920, height: 1080 });
+        
+        // Block heavy resources
+        await newPage.setRequestInterception(true);
+        newPage.on('request', (req) => {
+          const type = req.resourceType();
+          if (['image', 'stylesheet', 'font', 'media', 'websocket'].includes(type)) {
+            req.abort();
+          } else {
+            req.continue();
+          }
+        });
+
+        await newPage.goto(url, { waitUntil: 'domcontentloaded', timeout: 10000 });
+        await randomDelay(DELAYS.visitMin, DELAYS.visitMax);
+        
+        const info = await extractContactInfo(newPage, url);
+        
+        if (info.type !== 'unknown') {
+          const result = {
+            url,
+            title: info.title,
+            type: info.type,
+            contactEmail: info.contactEmail,
+            niche,
+            country: country || 'global',
+            foundDate: new Date().toISOString(),
+            searchQuery: query
+          };
+          onResult?.(result);
+          results.push(result);
+        }
+      } catch (error) {
+        // Silent fail for speed
+      } finally {
+        if (newPage) await newPage.close().catch(() => {});
+      }
+    });
+
+    await Promise.all(batchPromises);
+  }
+  
+  return results;
 };
 
 // Main scraping function
@@ -158,8 +223,12 @@ export const scrapeGuestPostingSites = async ({
       '--disable-setuid-sandbox',
       '--disable-blink-features=AutomationControlled',
       '--disable-infobars',
+      '--disable-dev-shm-usage',
+      '--disable-accelerated-2d-canvas',
+      '--disable-gpu',
       '--window-size=1920,1080',
-      '--start-maximized'
+      '--no-first-run',
+      '--no-zygote'
     ]
   });
 
@@ -167,22 +236,18 @@ export const scrapeGuestPostingSites = async ({
   const totalQueries = searchQueries.length;
   const visitedUrls = new Set();
   const engine = searchEngines[searchEngine] || searchEngines.duckduckgo;
+  const userAgent = new UserAgent({ deviceCategory: 'desktop' });
 
   try {
     const page = await browser.newPage();
-    
-    // Set random user agent
-    const userAgent = new UserAgent({ deviceCategory: 'desktop' });
     await page.setUserAgent(userAgent.toString());
-    
-    // Set viewport
     await page.setViewport({ width: 1920, height: 1080 });
     
-    // Block unnecessary resources for speed
+    // Block unnecessary resources
     await page.setRequestInterception(true);
     page.on('request', (req) => {
-      const resourceType = req.resourceType();
-      if (['image', 'stylesheet', 'font', 'media'].includes(resourceType)) {
+      const type = req.resourceType();
+      if (['image', 'stylesheet', 'font', 'media'].includes(type)) {
         req.abort();
       } else {
         req.continue();
@@ -193,51 +258,41 @@ export const scrapeGuestPostingSites = async ({
       const query = searchQueries[i];
       onProgress?.(i + 1, totalQueries);
       
-      console.log(`Searching: "${query}" on ${searchEngine}`);
+      console.log(`[${i + 1}/${totalQueries}] Searching: "${query}" on ${searchEngine}`);
       
       try {
-        // Navigate to search engine
         const searchUrl = engine.buildUrl(query, country);
-        console.log(`Navigating to: ${searchUrl}`);
+        await page.goto(searchUrl, { waitUntil: 'networkidle2', timeout: 20000 });
         
-        await page.goto(searchUrl, { waitUntil: 'networkidle2', timeout: 30000 });
-        
-        // Wait for specific selector if defined
+        // Wait for results
         if (engine.waitSelector) {
           try {
-            await page.waitForSelector(engine.waitSelector, { timeout: 10000 });
-          } catch (e) {
-            console.log(`Wait selector ${engine.waitSelector} not found, continuing...`);
-          }
+            await page.waitForSelector(engine.waitSelector, { timeout: 5000 });
+          } catch (e) { /* continue anyway */ }
         }
         
         // Human-like behavior
-        await randomDelay(2000, 4000);
+        await randomDelay(DELAYS.pageLoadMin, DELAYS.pageLoadMax);
         await humanMove(page);
         await humanScroll(page);
         
-        // Additional scroll for JS-rendered pages
+        // Extra scroll for JS-rendered pages
         if (engine.needsJsRender) {
-          await randomDelay(1000, 2000);
           await humanScroll(page);
-          await randomDelay(1000, 1500);
         }
         
-        // Extract search results with multiple selector strategies
+        // Extract search results
         const results = await page.evaluate((selectors) => {
           const links = new Set();
-          const excludeDomains = selectors.excludeDomains || [selectors.excludeDomain];
+          const excludeDomains = selectors.excludeDomains || [];
           
-          // Try each result selector
-          for (const resultSelector of selectors.resultSelectors || [selectors.resultSelector]) {
+          for (const resultSelector of selectors.resultSelectors || []) {
             document.querySelectorAll(resultSelector).forEach(el => {
-              // Try each link selector
               for (const linkSelector of selectors.linkSelectors || ['a']) {
                 el.querySelectorAll(linkSelector).forEach(link => {
-                  if (link && link.href && link.href.startsWith('http')) {
-                    const isExcluded = excludeDomains.some(domain => link.href.includes(domain));
+                  if (link?.href?.startsWith('http')) {
+                    const isExcluded = excludeDomains.some(d => link.href.includes(d));
                     if (!isExcluded) {
-                      // Clean tracking parameters
                       try {
                         const url = new URL(link.href);
                         links.add(url.origin + url.pathname);
@@ -251,65 +306,38 @@ export const scrapeGuestPostingSites = async ({
             });
           }
           
-          // Fallback: get all external links if no results found
+          // Fallback
           if (links.size === 0) {
             document.querySelectorAll('a[href^="http"]').forEach(link => {
-              const isExcluded = excludeDomains.some(domain => link.href.includes(domain));
+              const isExcluded = excludeDomains.some(d => link.href.includes(d));
               if (!isExcluded && !link.href.includes('javascript:')) {
                 try {
                   const url = new URL(link.href);
                   links.add(url.origin + url.pathname);
-                } catch {
-                  links.add(link.href);
-                }
+                } catch {}
               }
             });
           }
           
-          return Array.from(links).slice(0, 20);
+          return Array.from(links).slice(0, 25);
         }, engine.selectors);
 
-        console.log(`Found ${results.length} results from ${searchEngine}`);
-
-        // Visit each result
-        for (const url of results) {
-          if (visitedUrls.has(url)) continue;
+        // Filter by country
+        const countryFilteredResults = results.filter((url) => {
+          if (visitedUrls.has(url)) return false;
           visitedUrls.add(url);
+          return urlMatchesCountry(url, country);
+        });
 
-          try {
-            // Open in new tab for speed
-            const newPage = await browser.newPage();
-            await newPage.setUserAgent(userAgent.toString());
-            
-            await newPage.goto(url, { waitUntil: 'domcontentloaded', timeout: 15000 });
-            await randomDelay(1000, 2000);
-            
-            const info = await extractContactInfo(newPage, url);
-            
-            if (info.type !== 'unknown') {
-              const result = {
-                url,
-                title: info.title,
-                type: info.type,
-                contactEmail: info.contactEmail,
-                niche,
-                country: country || 'global',
-                foundDate: new Date().toISOString(),
-                searchQuery: query
-              };
-              
-              onResult?.(result);
-              console.log(`Found: ${url} (${info.type})`);
-            }
-            
-            await newPage.close();
-          } catch (error) {
-            console.error(`Error visiting ${url}:`, error.message);
-          }
+        console.log(`Found ${results.length} results (${countryFilteredResults.length} after country filter)`);
+
+        // Process results in parallel
+        if (countryFilteredResults.length > 0) {
+          await processResultsBatch(browser, countryFilteredResults, userAgent, niche, country, query, onResult);
         }
 
-        // Random delay between searches (human-like)
-        await randomDelay(3000, 6000);
+        // Delay between searches
+        await randomDelay(DELAYS.searchMin, DELAYS.searchMax);
         
       } catch (error) {
         console.error(`Error searching "${query}":`, error.message);
@@ -319,4 +347,3 @@ export const scrapeGuestPostingSites = async ({
     await browser.close();
   }
 };
-
